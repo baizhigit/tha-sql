@@ -31,7 +31,8 @@ SELECT
     ctc."concessionId",
     ctc."cardTypeId",
     ci.name AS city,
-    ct.name,
+    ct.name code,
+    tl.title_ru,
     rules.types AS type,
     rules.keys AS key,
     rules.values AS value,
@@ -42,6 +43,7 @@ SELECT
     cc.name AS category
 FROM public.card_type_concessions ctc
 LEFT JOIN public.card_types ct ON ct.id = ctc."cardTypeId"
+LEFT JOIN public.ct_card_titles tl on tl.nn = ct.name
 LEFT JOIN public.concessions c ON c.id = ctc."concessionId"
 LEFT JOIN public.concession_groups g ON g.id = c."groupId"
 LEFT JOIN (
