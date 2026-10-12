@@ -1,0 +1,28 @@
+formdata <entries>
+​​
+0: file_photo_0_data → ""
+1: lastName → ""
+2: firstName → ""
+3: middleName → ""
+4: birthDate → ""
+5: iin → ""
+6: file_iin_0_data → ""
+7: institutionId → "-2"
+8: institutionConcessions → ""
+9: institutionConcessions_min → "12.10.2026"
+10: institutionConcessions_max → ""
+11: parentConcessionCustomerId → ""
+12: parentIin → ""
+13: documentTypeId_modal_data → ""
+14: citizenshipCountryId → "101"
+15: regionId → "1"
+16: addressSource → "Р"
+17: address → ""
+18: codeword → ""
+19: email → ""
+20: phones → ""
+21: deliveryInstitutionId → "-2"
+22: addField1_5_text → ""
+23: documentTypeId → '[{"fields":{"file_document":["18096824"]}}]'
+​
+register.js:69:25

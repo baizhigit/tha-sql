@@ -1,0 +1,456 @@
+
+Final plan: ScannerAgent
+Location: ../kb/scanner-agent (new sibling repo)
+Stack: Go, Windows-only, WIA (USB) + eSCL (network), single-page scan, no ADF
+
+1. Repo structure
+../kb/scanner-agent/
+├── go.mod
+├── cmd/scanner-agent/main.go       # flags: -addr 127.0.0.1:17880, -token, -version
+├── internal/httpapi/               # router, CORS, handlers, error mapping
+├── internal/backend/
+│   ├── backend.go                  # interface: List(ctx), Scan(ctx, opts)
+│   ├── wia/                        # go-ole COM → WIA 2.0 enumerate + scan
+│   └── escl/                       # zeroconf mDNS + stapelberg/airscan
+└── README.md
+
+2. HTTP API
+Endpoint	Spec
+GET /health	{"ok":true,"version":"..."}
+GET /scanners	[{"id","name","backend":"wia"|"escl"}]
+POST /scan	JSON optional {scannerId?, dpi?, colorMode?}; empty body = default scanner. Response: image blob, Content-Type: image/jpeg
+- Bind 127.0.0.1 only; CORS for the app origin; optional X-Agent-Token.
+
+3. Backends
+- eSCL: discover via _uscan._tcp mDNS; scan platen, color/gray, dpi → JPEG.
+- WIA: COM on locked OS thread; list devices; scan → PNG/JPEG buffer.
+- Backend priority: explicit scannerId → default WIA → first eSCL (or reverse if preferred).
+
+4. Frontend (cropper.js)
+1. On popup open: GET /health → clear “agent not running” UX.
+2. Optional: GET /scanners → picker when >1 device.
+3. Keep POST /scan with empty body working (current flow unchanged).
+4. Map errors: agent down / no device / scan failed.
+
+5. Milestones
+1. M1 — scaffold + /health + CORS + mock backend; frontend health check
+2. M2 — eSCL list + scan (verify on network MFP)
+3. M3 — WIA list + scan (verify on USB scanner)
+4. M4 — scanner picker + dpi/color options in cropper UI
+5. M5 — GOOS=windows build, autostart (HKCU Run), version pin
+
+6. Risks
+- WIA COM lifecycle from Go (LockOSThread, stream transfer) — isolate in wia package.
+- eSCL devices with self-signed TLS — allow insecure on LAN.
+- TWAIN-only legacy scanners — out of scope for v1 (add only if a real device fails).
+
+
+
++ Thought: 3.0s
+M2 done — eSCL network backend implemented.
+Added
+- internal/backend/escl/ — mDNS discovery (_uscan._tcp via brutella/dnssd) + stapelberg/airscan client
+- List — 2s discovery sweep, caches results, IDs as escl:<host>
+- Scan — platen, single page, default 150 DPI / RGB24; honors scannerId, dpi, colorMode
+- Tests with a fake eSCL HTTP server (status → capabilities → ScanJobs → NextDocument)
+- Flags: -mock (mock now opt-in); version 0.1.0-m2
+- HTTP scan routing: real backend with devices wins over falling through to mock
+Verified
+go build / vet / test     → ok (escl + httpapi)
+GOOS=windows go build     → scanner-agent.exe (11MB)
+Try on LAN
+go run ./cmd/scanner-agent
+curl http://127.0.0.1:17880/scanners
+curl -X POST http://127.0.0.1:17880/scan -o page.jpg
+Next: M3 — WIA USB backend?
+
+
+
+
+
+
+M3 done — WIA backend implemented.
+Added
+- internal/backend/wia/
+- Windows (wia_windows.go): COM via go-ole — list scanners (Type=1), connect, set DPI/color, Transfer → JPEG
+- Non-Windows (wia_other.go): stub — empty list / “Windows only”
+- Shared: ID mapping wia:<DeviceID>, DPI default 150, color modes
+- Wired in main.go — order: WIA → eSCL → mock
+- Version 0.1.0-m3, README updated
+Verified
+go test / vet (linux)     → ok
+GOOS=windows go build     → scanner-agent.exe (11.5MB)
+GOOS=windows go vet       → ok
+Test on Windows
+go run ./cmd/scanner-agent
+
+.\scanner-agent.exe
+curl http://127.0.0.1:17880/scanners
+curl -X POST http://127.0.0.1:17880/scan -o page.jpg
+# specific device:
+curl -X POST http://127.0.0.1:17880/scan -d "{\"scannerId\":\"wia:{GUID}\\0000\",\"dpi\":300}" -o page.jpg
+Linux still runs (WIA stub + eSCL); real USB scanning needs the Windows binary.
+Next: M4 — frontend picker/options in cropper.js?
+
+
+
+
+
+
+M4 done — cropper popup now integrates with ScannerAgent.
+Frontend changes
+cropper.blade.php
+- Agent status banner (green/red)
+- Scan options: scanner picker, DPI (150/200/300), color mode
+- Cache-bust cropper.js?v=6
+cropper.js
+1. On open: GET /health → status banner
+2. If healthy: GET /scanners → picker (shown only when >1 device)
+3. POST /scan with JSON {scannerId?, dpi, colorMode} (empty body still works)
+4. Errors mapped: agent down / 401 token / 404 not found / “no scanners” / scan failed
+5. Safe blob error-body parsing (never touches responseText)
+Verified
+node --check cropper.js → OK
+Manual check
+1. Run agent on the PC (scanner-agent.exe)
+2. Open cropper popup → green “ScannerAgent подключён”
+3. Scan → image lands in cropper → crop/upload as before
+Next: M5 — packaging/autostart (installer / tray / HKCU Run)?
+
+
+is it ok to add scanning functionality on cropping file ? i may need to add scan button also in other parts of app
+
+
+Yes — scan inside the cropper is the right design. Don’t scatter ScannerAgent calls around the app.
+Why cropper is the right home for scan
+Path	Flow today
+File picker	open cropper → crop → UploadPhoto
+Scanner	open cropper → scan → crop → UploadPhoto
+Webcam	open webcam popup → snap → UploadPhoto (no crop)
+PDF	open pdf viewer → upload (no crop)
+A raw scanner image almost always needs crop/rotate before submit (same as file upload). Putting “Сканировать” inside cropper reuses that pipeline — no second crop UI, no duplicated upload/callback logic.
+Other parts of the app
+Your app already has the right pattern: scan buttons elsewhere should open the cropper, not talk to the agent directly.
+Evidence in the codebase — UploadDocumentScan() already exists:
+    function UploadDocumentScan() {
+        Debug('UploadDocumentScan');
+        var popup = window.open("{{route('dev.get.cropper')}}?t=" + Date.now(), ...);
+But the button #uploadScanFromFileSystem was never rendered (dead binding in documents.js / register.js).
+Recommended approach
+[Документы] [Профиль] [Регистрация] ...
+      │
+      └─ "Сканировать" button → window.open(cropper)
+                                    │
+                                    ├─ file upload
+                                    └─ scan (agent) → crop → shared UploadPhoto callback
+1. Keep agent + scan UI only in cropper (current M4).
+2. Add/reuse “Сканировать” buttons in each surface that needs it → open cropper (same as photo upload).
+3. Restore dead #uploadScanFromFileSystem in modalDocument.blade.php if documents need a dedicated scan entry.
+4. Use ?noscan=1 only where scan must be hidden (already supported).
+When not to use cropper
+Only if a place needs scan → save with no crop (e.g. ticket attachment). Then either:
+- open cropper anyway (simplest, user can accept full frame), or
+- add a thin “scan-only” helper that calls /scan + UploadPhoto — only if you actually need it.
+Bottom line: Scan-in-cropper is fine. For the rest of the app, add buttons that open cropper, not buttons that call the agent.
+Want a plan to (a) restore the documents scan button, and/or (b) list the surfaces that should get a scan entry?
+
+
+
+
+M5 = packaging & autostart — ship scanner-agent.exe so end users get it without developers.
+Scope
+Item	Detail
+Build	GOOS=windows GOARCH=amd64 → single scanner-agent.exe (no install deps)
+Distribution	Zip / MSI / simple installer folder
+Autostart	Per-user: HKCU Run key (no admin) or machine service (admin)
+Tray / lifecycle	Optional: minimize to tray, “Start with Windows”, version in /health
+Ops polish	Port conflict handling, log file, -origins locked to app origin (not *)
+Suggested shape
+scanner-agent/
+├── cmd/scanner-agent/
+├── build/
+│   ├── build.ps1           # GOOS=windows build + version stamp
+│   ├── install.ps1         # copy + HKCU Run registration
+│   └── uninstall.ps1
+└── dist/scanner-agent.exe
+Install flow (minimal):
+1. Copy scanner-agent.exe → %LOCALAPPDATA%\ScannerAgent\
+2. HKCU\...\Run → "ScannerAgent"="...scanner-agent.exe" -origins https://your-app
+3. User launches once (or Run key starts at login)
+4. Frontend already detects via /health
+Decisions before M5
+1. Autostart style — HKCU Run (simple, per-user) vs Windows service (always-on, needs admin)?
+2. Installer — plain zip+ps1, or MSI/scoop?
+3. Tray icon — needed, or background process is enough?
+4. Hardening — random port + token written for the frontend, or keep fixed :17880?
+My default recommendation: HKCU Run + zip/ps1 first, tray and MSI later if users need them.
+
+
+
+
++ Thought: 813ms
+M5 plan — packaging & autostart (default recommendation)
+Goals
+- One-file Windows binary users can run without dev tools
+- Autostart per user (no admin)
+- Safe defaults (origins locked, fixed port OK for v1)
+- Simple zip + PowerShell scripts (no MSI/tray yet)
+Deliverables
+1. Build script — scanner-agent/build/build.ps1
+# stamp version, cross-build from CI or Windows
+$env:GOOS="windows"; $env:GOARCH="amd64"
+go build -ldflags "-X main.version=0.1.5" -o ..\dist\scanner-agent.exe .\cmd\scanner-agent
+- Output: dist/scanner-agent.exe
+- Version already flows to /health via main.version
+2. Install script — build/install.ps1
+Step	Action
+1	Create %LOCALAPPDATA%\ScannerAgent\
+2	Copy scanner-agent.exe there
+3	Register HKCU Run: ScannerAgent → "...scanner-agent.exe" -origins https://your-app.example
+4	Start process now
+5	Optional: write install.log
+Registry:
+HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+ScannerAgent = "C:\Users\<u>\AppData\Local\ScannerAgent\scanner-agent.exe" -origins https://your-app.example
+3. Uninstall — build/uninstall.ps1
+- Kill process
+- Remove Run key
+- Delete %LOCALAPPDATA%\ScannerAgent\
+4. Package — build/package.ps1 or CI step
+dist/
+  scanner-agent.exe
+  install.ps1
+  uninstall.ps1
+  README.txt          # double-click install instructions
+Zip → scanner-agent-win64-vX.Y.Z.zip
+5. Defaults to lock in
+Flag	Value
+-addr	127.0.0.1:17880 (keep; frontend already hardcodes it)
+-origins	real app origin(s), not *
+-token	optional later (frontend would send X-Agent-Token)
+-mock	off
+Frontend agentBaseURL can stay http://127.0.0.1:17880 for v1.
+6. README updates
+- User install: unzip → run install.ps1
+- Dev: go run ./cmd/scanner-agent -mock
+- Status: M5 done
+Out of scope (later)
+- Tray icon / UI
+- MSI / signed installer
+- Windows service (admin)
+- Port/token discovery file for the frontend
+- Auto-update
+Implementation order
+1. build.ps1 + version ldflags check
+2. install.ps1 / uninstall.ps1 (HKCU Run)
+3. Package script + user README.txt
+4. Smoke: install on Windows → /health → cropper scan
+Open question
+App origin for -origins in the install script — e.g. https://kb.example.com, http://localhost:8000 for dev? I’ll put a placeholder you can fill, or you give me the real origin(s).
+
+
+
+
+M5 done — packaging & autostart.
+Added build/
+Script	Purpose
+build.ps1	Cross-build exe, stamps -X main.version=
+install.ps1	Copy → %LOCALAPPDATA%\ScannerAgent\, **HKCU Run** autostart, start + /health check
+uninstall.ps1	Stop, remove Run key + files
+package.ps1	Build + zip with README.txt
+Artifacts
+dist/scanner-agent.exe                      # 8MB PE32+
+dist/scanner-agent-win64-0.1.0-m5.zip       # exe + install + uninstall + README
+Install (on Windows PC)
+powershell -ExecutionPolicy Bypass -File install.ps1 -Origins "https://your-app.example"
+Also
+- Version 0.1.0-m5, .gitignore for dist/
+- README: install/build/status updated
+- go test / go vet → ok
+M1–M5 complete. Next options:
+- Real-device test (WIA USB / eSCL LAN)
+- Token + frontend X-Agent-Token
+- Tray icon / MSI later
+
+
+
+1. single-page-platen JPEG-only
+2. yes gain
+3. yes make persistent IDs
+
+
+What changed
+internal/backend/backend.go
+- ScanOptions gains Source (platen default | feeder) and Format (jpeg default | png | pdf). WIA/mock ignore them; HTTP API passes them through untouched.
+internal/backend/escl/escl.go
+- Persistent IDs: serviceID now derives from the mDNS instance Name (escl:Fake_Scanner) instead of Host, so IDs survive DHCP changes. Legacy escl:<host> IDs still resolve via a host-alias fallback. Removed the HasSuffix matcher that could collide (a.local vs xa.local); exact full-ID or bare-name match only.
+- buildSettings rewritten: builds ScanSettings from scratch instead of mutating the ADF preset. Unknown source/format/color now return errors instead of silently coercing to defaults; DPI defaults to 150 and clamps to 75–1200. Kept the A4 physical scan region (units are 1/300″, so it's DPI-independent) to avoid changing the wire format devices accept.
+- Scan hardening: page body closed after read (was leaking connections — job.Close() only DELETEs the job), 50 MiB per-page cap, Scan copies the target entry instead of aliasing the shared cache slice, cache TTL (30s) split from discovery timeout (2s), zero-page error reworded. Scan stays single-page-first-page by design, now documented on the method.
+- humanName also unescapes %20 when no ty TXT record exists.
+internal/backend/escl/escl_test.go
+- Updated IDs to the stable form; new tests: bare-ID scan, legacy host-alias scan, ID stability across host change, zero-page (404) error, invalid source/format/color rejected, settings matrix (defaults, feeder+pdf, DPI clamps, region present).
+Known limits (not addressed, per scope)
+- context is still only pre-checked; airscan builds requests without WithContext and has its own 10×1s 503 retry, so mid-scan cancel won't abort promptly. Worth a follow-up with a ctx-aware HTTPClient wrapper.
+- MIME still echoes the requested format rather than the device's response header.
+- UUID/serial-based IDs deferred — instance-name is stable and needs no per-device HTTP fetch in List().
+Nothing committed, per repo convention.
+
+
+
+
+
+Fixed and verified end-to-end against your Canon. Rerun your original command — it now returns a JPEG instead of 500.
+Root cause
+Your MF230 301-redirects http://…/eSCL/ScannerStatus to https://…:443, but the client only spoke plain HTTP (and couldn't have survived the redirect anyway — Go downgrades redirected POSTs to GET, and the printer's cert is self-signed).
+Changes
+internal/backend/escl/escl.go
+- Scheme probing (probeEndpoint): one GET /eSCL/ScannerStatus with redirects disabled picks HTTP (200), HTTPS-via-redirect (301→Location port, else 443), or HTTPS-only fallback — so POST ScanJobs always goes out on the right scheme from the start.
+- HTTPS transport (httpsClientFor + httpsUpgrade): pinned host:port dialing, InsecureSkipVerify scoped to this transport only (approved; printers use self-signed certs). HTTP path is byte-for-byte unchanged via NewClientForService.
+- ID fix: mDNS escaping unescaped — your scanner is now escl:Canon_MF230 instead of escl:Canon\_MF230 (old host-based IDs still resolve as alias).
+- Discovery logs endpoint (host:port ips=[…]) and the chosen https://… URL.
+internal/httpapi/server.go — scan failures now logged server-side (scan failed: …); no more blind "scan failed" 500s.
+Tests (18/18 pass with -race): full scans against httptest.NewTLSServer, redirect→HTTPS end-to-end, HTTPS-only probe, unreachable-probe error, ID unescaping. go vet/gofmt clean.
+README.md — eSCL row notes HTTP/HTTPS auto-negotiation; ID format corrected.
+Live verification (your printer, 10.26.2.230)
+- GET /scanners → [{"id":"escl:Canon_MF230","name":"Canon MF230 Series","backend":"escl"}]
+- POST /scan → 200 image/jpeg, valid 1240×1754 RGB JPEG (exactly A4 @150dpi), log: scan THA2-PRN002.local via https://THA2-PRN002.local:443
+- Test agent stopped and temp files removed; nothing committed.
+One heads-up: your device advertises only jpeg+pdf and 75/150/300dpi — requesting format: png will now fail with a clear device error rather than silently misbehaving.
+
+
+
+
+
+
+
+
+
+
+
+
+
+so changes made in following files are related to scanner functionality?:
+app/Http/Controllers/DevController.php
+public/js/register.js
+resources/views/components/customer/modalDocument.blade.php
+resources/views/dev/dynamicForm.blade.php
+resources/views/documents/addDocumentWindow.blade.php
+static/application/frontend/src/js/modules/customer/documents.js
+
+
+Yes — all 6 are scanner-related, but caller-side only. Actual scan lives in HEAD 4a9c93dc: public/js/cropper.js + resources/views/dev/cropper.blade.php (GET 127.0.0.1:17880/health|/scanners|POST /scan).
+History for your 6 files:
+- app/Http/Controllers/DevController.php: 0b632b8d added cropperTest(Request) with ?scan=1 -> $enableScan; 93149450 renamed to ?noscan=1 -> $noScan to match @if(empty($noScan)) in cropper.blade.php:154.
+- resources/views/components/customer/modalDocument.blade.php: c08524c1 added docs.document_scaning label; 0b632b8d added #uploadScanFromFileSystem + UploadDocumentScan()->cropper?scan=1 vs UploadDocumentPhoto()->cropper; 93149450 switched to ?noscan=1/?t=; 788d5546 removed scan button, merged back to single ?t= (scan always on).
+- resources/views/dev/dynamicForm.blade.php: same pattern — 0b632b8d added UploadDocumentScan(?scan=1), 93149450 -> UploadDocumentPhoto(?noscan=1) / UploadDocumentScan(?t=), 788d5546 -> both ?t= (current :111-119).
+- resources/views/documents/addDocumentWindow.blade.php: fd19bcba added #btnUploadScan(?t=, scan on) vs #btnUploadFile(?noscan=1); 788d5546 made both ?t=. Leftover: current :90-94 binds #btnUploadScan but HTML :43-50 has no such button.
+- public/js/register.js:288,300-302: 0b632b8d added $scanBtn.find('#uploadScanFromFileSystem').on(click, UploadDocumentScan) in ShowDocumentModal.
+- static/.../customer/documents.js:306,322-327: fd19bcba same $scanBtn -> UploadDocumentScan() in addDocument() (relies on global from blade).
+So: no scan protocol in those 6, only noscan flag routing + button wiring.
+
+
+
+
+Done — minimal cleanup applied, 5 files, 30 deletions:
+- modalDocument.blade.php:78-83 — deleted duplicate UploadDocumentScan().
+- dynamicForm.blade.php:116-120 — deleted duplicate UploadDocumentScan().
+- addDocumentWindow.blade.php:90-94 — deleted dead $('#btnUploadScan') handler (no such button in HTML).
+- public/js/register.js:288,300-302 — deleted $scanBtn decl + binding.
+- static/.../customer/documents.js:306,322-327 — deleted $scanBtn decl + binding.
+Kept: DevController.php:16 $noScan flag + core cropper.blade.php / cropper.js scan flow.
+Verify:
+- grep uploadScanFromFileSystem|UploadDocumentScan|btnUploadScan → 0 hits.
+- node --check on both JS files → clean. php -l unavailable in this env (command not found), so blade/PHP syntax not machine-checked — changes are pure deletions, diff reviewed.
+- git diff --stat: 5 files, +1/-30.
+Note: static/.../src/.../documents.js is a source file — if your frontend pipeline bundles it, run the build so prod picks up the cleanup.
+
+
+
+
+
+
+
+Windows WIA DeviceManager
+
+Full WIA fix implemented (single-page v1, default DPI 300).
+wia_windows.go:
+- Fixed property IDs: CUR_INTENT=6146, XRES=6147, YRES=6148, DATATYPE=4103, DEPTH=4104, DOC_HANDLING=3087/3088 (were 4099/4100/4105/6146).
+- Fixed intent values: color=1, gray=2, text=4 (was 1/2/3); datatype 1/2/3 + depth 24/8/1 mapping added.
+- Fixed image bytes: FileData → BinaryData SAFEARRAY with SaveFile temp-file fallback (was GetProperty("Data") which never exists); MIME from FileExtension.
+- Transfer fallback: JPEG → BMP → PNG → TIFF → driver default (was JPEG-only, breaks WIA 1.0 BMP-only devices).
+- COM: oleCoInit() (bool,error) via OleError.Code() (S_FALSE→uninit, RPC_E_CHANGED_MODE→no uninit); string-match kept as fallback.
+- Fail-closed scanner filter (Type==1, skip on error), variantInt for VT_I*/UI*, Source support (platen|flatbed|feeder|adf, feeder errors fatal, flatbed best-effort), 50MB page cap, ctx checks, enriched errors.
+wia.go:
+- Default DPI 150→300, clamp 75–1200; sync.Mutex + cacheValid (caches empty results, race-free); explicit ScannerID bypasses stale 5s cache; normalizeSource/wiaIntent/wiaDepth added.
+Verified: go test ./... -count=1 all pass, go test -race for wia passes (incl. new concurrent/cache-bypass/not-found tests), GOOS=windows go build/vet OK.
+
+
+
+
+
+CORS Missing Allow Header
+
+Запрос из постороннего источника заблокирован: Политика одного источника запрещает чтение удалённого ресурса на http://127.0.0.1:17880/health?_=1790751422320. (Причина: заголовок «x-csrf-token» не разрешён согласно заголовку «Access-Control-Allow-Headers» из ответа CORS preflight).
+
+
+CORS fix implemented.
+Cause: app at http://mapi-1255.frontend.new.tha.kz sends x-csrf-token on GET /health, but Access-Control-Allow-Headers was hardcoded to Content-Type, X-Agent-Token — preflight failed.
+internal/httpapi/server.go:
+- Allow-Headers now echoes Access-Control-Request-Headers when origin is allowed (future-proof for axios/framework headers), falls back to Content-Type, X-Agent-Token, X-CSRF-Token, Authorization, Accept, X-Requested-With.
+- Added Access-Control-Max-Age: 600, Vary: Origin, Access-Control-Request-Headers, Access-Control-Request-Private-Network.
+- Added Private Network Access: Allow-Private-Network: true when requested (public *.tha.kz → 127.0.0.1 needs this in Chrome).
+- allowOrigin() normalizes trailing //whitespace, no longer sends empty Allow-Origin for non-CORS requests.
+Tests (server_test.go): preflight with x-csrf-token on /health?_=..., PNA echo, disallowed origin (no headers), actual GET carries Allow-Origin. All pass; GOOS=windows build OK.
+Action on the Windows host: reinstall with your origin in the allow-list:
+powershell -ExecutionPolicy Bypass -File install.ps1 -Origins "http://mapi-1255.frontend.new.tha.kz,http://localhost:8000"
+then retry init.
+
+
+
+
+is backend compatible with following payload coming from app request?
+
+{
+  "scannerId": "<#scannerSelect.val()>",
+  "dpi": 150 | 200 | 300,
+  "colorMode": "color" | "grayscale"
+}
+- scannerId — only if $('#scannerSelect').val() truthy. 0 scanners → empty select → omitted. 1 scanner → hidden select but still has one <option> → still sent. >1 → user-visible choice.
+- dpi — parseInt($('#scanDpi').val()), only if >0. Defaults to 150 in blade, so practically always sent.
+- colorMode — $('#scanColor').val(), defaults to color, practically always sent.
+
+
+
+so this scanning feature makes possible to scan directly from device, so it's safely don't store any docs on host pc, just upload to app?
+
+
+and how many types of scanner cover this implementation? all major manufacturers?
+
+
+
+
+
+Now on Windows:
+1. Copy dist/scanner-agent-win64-0.1.0.zip to the Windows PC (USB / download / messenger).
+2. Extract anywhere, e.g. Downloads\ScannerAgent\.
+3. Run PowerShell in that folder:
+
+powershell -ExecutionPolicy Bypass -File install.ps1 -Origins "http://mapi-1255.frontend.new.tha.kz,https://frontend.new.tha.kz"
+
+No admin needed — installs to %LOCALAPPDATA%\ScannerAgent\ + HKCU Run autostart.
+
+4. Verify:
+Invoke-RestMethod -Uri http://127.0.0.1:17880/health
+Invoke-RestMethod -Uri http://127.0.0.1:17880/scanners
+
+Expect {ok:true, version:0.1.0}.
+Uninstall: powershell -ExecutionPolicy Bypass -File uninstall.ps1
+
+
+
+
+
+
+
+
+

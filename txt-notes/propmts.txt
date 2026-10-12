@@ -1,0 +1,332 @@
+here some guidelines about new golang projects structure and mandatory files, taking into account that file and whole current repository that respects that guidelines, review the repo (structure, fiber, internals, work with database, use of some mandatory packages like catcher "github.com/ArseniySavin/catcher/pkg", "github.com/kamalshkeir/kenv") and create special golang project skill file
+
+
+Если необходимо отключить валидацию по льготам поля "Адрес" в городе Сарани (id 4 in cities table)
+Как берется getCity()
+review new uncommited logic Необходимо отключить валидацию поля "Адрес" в Сарани только по конкретным льготам
+лучше как дополнение, и нужно сделать г Сарань константой
+
+
+Тогда проверку нужно делать по двум условиям одновременно:
+город клиента = 4
+И льгота входит в список исключений
+Сейчас Concessions\Address получает объект льготы:
+$concession = $this->getOption('concession');
+$customer   = $concession->getCustomer();
+Поэтому можно проверять:
+$cityId       = $customer->getCity();
+$concessionId = $concession->getConcessionId();
+Рекомендуемый вариант — передавать список исключаемых льгот через params из таблицы concession_validations, например:
+{
+  "skipAddressValidationCities": [4],
+  "skipAddressValidationConcessions": [12, 15]
+}
+И пропускать проверку только если:
+$cityId === 4 && in_array($concessionId, $allowedConcessions, true)
+Это безопаснее, чем зашивать ID льгот в PHP. Для остальных льгот в Сарани текущая проверка адреса останется активной.
+Нужно уточнить ID или названия конкретных льгот, для которых требуется исключение. Также важно проверить, что они относятся к одной или нескольким записям concession_validations, поскольку валидаторы подключаются по группе льгот.
+
+
+here some golang projects to explore and analyze their structure, code style, specifics and similarities
+
+so what kind of practices should keep when working with or scaffolding new project
+
+can u check merge requests of commits of this repos and see left review comments on mr that require redo some pieces
+
+
+
+
+
+
+
+Необходимо во вкладку "Отчеты" добавить новый отчет по зарегистрированным анкетам. Создать возможность выгрузки данных по количеству зарегистрированных в группе заведений, в заведении, по льготе, за определенный день или период во всех имеющихся регионах.
+make plan for frontend part of this task
+
+
+
+The user chose: Server-rendered (GET form), Per-city only (like existing reports), New permission.
+Let me refine the plan based on these choices and confirm the backend API dependency. Since "per-city only" means we follow the existing city menu pattern (no all-regions aggregation needed on frontend), the report is simpler.
+Let me finalize the plan.
+Final Plan: New Report "Отчет по зарегистрированным анкетам"
+Decisions locked in: Server-rendered GET form · Per-city filtering (existing city menu pattern) · New permission rule.
+Backend dependency (note, not frontend scope)
+A report service API endpoint must exist (e.g. getRegisteredApplications in app/ApiClient/Module/Report.php) returning counts of registered questionnaires grouped by institution group / institution / concession for the given date range and city. The frontend consumes its response.
+Frontend implementation steps
+1. Controller method — app/Http/Controllers/ReportController.php
+Add getRegisteredApplications(Request $request):
+- Gate: if (!\AuthUser::can('view_registered_applications_report')) → redirect with errors.insufficient_rights
+- $cityId = get_city_id($request) (per-city)
+- Load for dropdowns: initApi->getInstitutionGroups(), initApi->getInstitutions(['cityId' => $cityId]), initApi->getConcessions(['cityId' => $cityId])
+- Parse: startDate/endDate (defaults: now → last 7 days, matching getConcessionVirtualCards), institutionGroupId (-1), institutionIdentifiers[], concessionIds[], page, limit
+- Call report API with params; wrap in LengthAwarePaginator (path '/'.$request->path(), append query via array_except(Input::query(), 'page'))
+- Return view report.applications.registered
+2. New view — resources/views/report/applications/registered.blade.php
+Modeled on concessionVirtualCardReport.blade.php:
+- @extends('app'); title/breadcrumbs from new lang keys
+- @include('common.menus.cities') + @include('components.report.menu')
+- Filter form (method="get", hidden city):
+- Institution group dropdown (institutionGroupId)
+- Institution multi-select (institutionIdentifiers[])
+- Concession multi-select (concessionIds[])
+- Date range (start/end) + per-page limit
+- Search button with total-count label
+- Results table (id="registeredReportTable"): columns institution group, institution, concession, count, date; export buttons (CSV/Excel/Print) reusing xport from card-full.js
+- Pagination render common/pagination/default
+- extra_footer_scripts: include XLSX lib
+3. Routes — routes/web.php
+Inside the existing report group (prefix report, middleware city), add:
+Route::get('applications/registered', 'ReportController@getRegisteredApplications')
+    ->name('get.reports.registeredApplications');
+(Server-rendered — no separate AJAX route needed.)
+4. Horizontal report menu — resources/views/components/report/menu.blade.php
+Add item gated by $user->can('view_registered_applications_report'), linking to route('get.reports.registeredApplications', request()->only('city')).
+5. Dropdown nav menu — resources/views/components/report/dropMenu.blade.php
+Add dropdown block gated by the new permission with per-city links (same pattern as other items).
+6. Language keys
+- resources/lang/{ru,en,kk}/nav.php: add 'registered_applications_report' => 'Отчет по зарегистрированным анкетам'
+- resources/lang/{ru,en,kk}/report.php: add table header keys (institution group, institution, concession, count, date)
+7. Frontend JS
+- Add date-range calendar init for the new form (small addition to static/application/frontend/src/js/modules/report/ — either a new registered.js module registered in src/js/main.js, or reuse of existing calendar/export code). Since server-rendered, only calendar + export wiring needed.
+- Rebuild bundle: run gulp scripts task from static/ to regenerate public/static/frontend/js/main.js
+8. Permission registration (backend-adjacent)
+- Create rule view_registered_applications_report and assign it (done outside this frontend file scope, but required for the menu gate to work)
+Verification
+- php artisan route:list | grep registeredApplications
+- Load the report URL for a city, apply filters (group/institution/concession/date), confirm counts and pagination render
+- Test CSV/Excel/Print export
+- Confirm menu item + dropdown appear for a user with the permission and are hidden without it
+This plan is ready. Note there's a hard backend dependency (the report service endpoint + the new permission rule). Would you like me to also draft the backend pieces (the Report.php API method and the controller call), or proceed with the frontend plan as scoped?
+
+
+
+
+Both decisions confirmed: customers index by createdAt, and nested hierarchy (group → institution → concession).
+I have everything I need to finalize the plan. Here is the complete, confirmed plan.
+Final Plan: New Report "Отчет по зарегистрированным анкетам"
+Data source: customers index (counts by createdAt in date range) · Grouping: nested hierarchy institution group → institution → concession · UI: server-rendered GET form, per-city filtering · Permission: new rule.
+Part A — Backend API (repo ~/projects/cen-1467)
+1. src/App/Component/Search/Customer.php — add statisticsRegisteredApplications(): Customer:
+- ES index = customers, type = customers
+- Query: range on createdAt (gte/lte from request params startDate/endDate), optional term filters for institutionGroupId, institutionId, concession, and cityId
+- Nested aggs: terms by institution group → sub-terms by institution → sub-terms by concession
+2. src/App/Model/Service/Report/Statistics/Customers/Handlers/RegisteredApplications.php — new handler read() (mirrors ByMonth.php): build CustomerSearchComponent, call statisticsRegisteredApplications(), parse resultAggregations() into nested arrays, return via responseHelper->data()->ok().
+3. src/App/Applications/Api/Modules/Report/Controller/Statistics/CustomersController.php — add registeredApplicationsAction() (GET) + Swagger annotation → route /stat/customers/registeredApplications.
+(Service class Customers.php needs no change — handler resolves automatically via Base::processRequest.)
+Part B — Frontend API client (repo ~/projects/frontend-master)
+4. app/ApiClient/Module/Report.php — add statisticsRegisteredApplications(array $parameters = []):
+- Set header X-Search-Type: customers
+- GET /stat/customers/registeredApplications with http_build_query($parameters)
+- json_decode body; catch RequestException (same pattern as statisticsCustomersByMonth)
+Part C — Frontend report UI (repo ~/projects/frontend-master)
+ 5. app/Http/Controllers/ReportController.php — add getRegisteredApplications(Request $request):
+- Gate via \AuthUser::can('view_registered_applications_report')
+- $cityId = get_city_id($request); load getInstitutionGroups(), getInstitutions(['cityId'=>...]), getConcessions(['cityId'=>...])
+- Parse startDate/endDate (default last 7 days), institutionGroupId(-1), institutionIdentifiers[], concessionIds[], page, limit
+- Call apiClient->report->statisticsRegisteredApplications([...]) with REP_TOKEN; wrap in LengthAwarePaginator
+- Return view report.applications.registered
+ 6. New view resources/views/report/applications/registered.blade.php (modeled on concessionVirtualCardReport.blade.php):
+- @extends('app'), title/breadcrumbs from new lang keys
+- Include common.menus.cities + components.report.menu
+- GET filter form (hidden city): institution group dropdown, institution multi-select, concession multi-select, date range (start/end), per-page limit, search button with total
+- Nested results table (id="registeredReportTable"): institution group → institution → concession rows with count + date
+- Export buttons (CSV/Excel/Print) reusing xport pattern from card-full.js
+- Pagination render common/pagination/default; XLSX lib in extra_footer_scripts
+ 7. routes/web.php — in report group: Route::get('applications/registered', 'ReportController@getRegisteredApplications')->name('get.reports.registeredApplications');
+ 8. Menus:
+- resources/views/components/report/menu.blade.php — add horizontal menu item (gated by new permission)
+- resources/views/components/report/dropMenu.blade.php — add dropdown block with per-city links (gated by new permission)
+ 9. Language keys — resources/lang/{ru,en,kk}/nav.php ('registered_applications_report' => 'Отчет по зарегистрированным анкетам') and report.php (table header keys)
+10. Frontend JS — static/application/frontend/src/js/modules/report/registered.js for date-range calendar + export wiring; register in src/js/main.js; rebuild bundle (gulp scripts from static/ → public/static/frontend/js/main.js)
+Part D — Permission
+11. Create rule view_registered_applications_report (back office) and assign to relevant roles. Gates controller + both menu items.
+Verification
+- Backend: curl new endpoint with X-Application-Token + date/city/group/concession params → verify nested counts
+- Frontend: php artisan route:list | grep registeredApplications
+- Load report page for a city, apply filters → confirm nested table + pagination render
+- Test CSV/Excel/Print export
+- Confirm menu/dropdown visibility follows the permission
+The plan is complete and ready to execute. Both repos are involved. Would you like me to begin implementation (starting with Part A backend, then Parts B–D)?
+
+
+
+
+
+Summary
+Implemented the new "Отчет по зарегистрированным анкетам" (Registered profiles report) using profile naming throughout.
+Backend (~/projects/cen-1467)
+- src/App/Component/Search/Customer.php — added statisticsRegisteredProfiles(): ES query on customer_cards type filtered by createdAt range, city, institution group, institutions, concessions; nested terms aggs by institutionGroupId → institutionId → concession.
+- src/App/Model/Service/Report/Statistics/Customers/Handlers/RegisteredProfiles.php (new) — handler that runs the search and parses nested aggregations into data.
+- src/App/Applications/Api/Modules/Report/Controller/Statistics/CustomersController.php — added registeredProfilesAction() → route /stat/customers/registeredProfiles.
+Frontend (~/projects/frontend-master)
+- app/ApiClient/Module/Report.php — added statisticsRegisteredProfiles() calling the new endpoint.
+- app/Http/Controllers/ReportController.php — added getRegisteredProfiles() (permission-gated, loads dropdowns, calls API, passes name maps + result to view).
+- resources/views/report/applications/registered.blade.php (new) — GET filter form (group/institution/concession/date range) + nested results table with totals + CSV/Excel/Print export.
+- routes/web.php — added get.reports.registeredProfiles route.
+- components/report/menu.blade.php + dropMenu.blade.php — menu item/dropdown gated by new permission.
+- lang/{ru,en,kk}/nav.php + report.php — added nav + column label keys.
+- static/application/frontend/src/js/modules/report/registered.js (new) + registered in main.js; rebuilt public/static/frontend/js/main.js (via browserify with Node 10, since gulp 3 is incompatible with Node 24).
+Remaining (deployment/back-office)
+- Create and assign the permission rule view_registered_profiles_report (gates controller + menu items).
+Note: the backend aggregates over the customer_cards type because it's the only one carrying cityId, institutionGroupId, and concession fields together — let me know if "registered profiles" should instead count over the customers type and I'll adjust.
+
+
+Отчёт теперь отображает каждую дату выбранного периода как отдельную колонку.
+Изменения
+Backend (~/projects/cen-1467)
+- Customer.php — в statisticsRegisteredProfiles() добавлена вложенная агрегация byDay (date_histogram по createdAt, interval day) внутри каждой льготы.
+- RegisteredProfiles.php — обработчик теперь парсит byDay bucket'ы в массив ['Y-m-d' => count] у каждой льготы.
+Frontend (~/projects/frontend-master)
+- ReportController.php — построен список $dates (все дни от startDate до endDate) и передан в view.
+- registered.blade.php — таблица теперь имеет:
+- Строки: группа заведений → заведение → льгота
+- Колонки: по одному дню на каждую дату периода + колонка «Всего»
+- Ячейка = число зарегистрированных анкет за этот день
+Экспорт (CSV/Excel/Print) работает от DOM-таблицы, поэтому автоматически включает новые колонки.
+
+
+
+
+review Windows WIA DeviceManager implementation
+
+
+
+
+
+
+
+ Which Go stack — stdlib net/http, chi, gin, or Echo?
+- Full server-rendered login page (port Blade) or JSON-only API for existing frontend?
+- Do you need user/ping ACL/roles in Go now, or just login + cookie + auth middleware stub?
+
+
+stdlib net/http
+JSON-only API
+yes with user/ping ACL/roles
+
+
+
+2. Plan: Same simple login in Go (no code yet)
+Proposed minimal service — cmd/server, internal/{handler,middleware,backend,validator}:
+1. Config (env): API_BACKEND, AUTHHISTORY_BACKEND, APP_TOKEN, PORT, COOKIE_NAME=census, COOKIE_SECURE, timeouts 5s/4s. godotenv + os.Getenv.
+2. POST /login handler mirrors postLoginForm:
+- Parse form/JSON {email,password,iin} → validate: net/mail.ParseAddress + non-empty password + IIN function ported from AppServiceProvider.
+- http.Client{Timeout:5s} POST to API_BACKEND/user/login with both headers, body as above.
+- Parse {result:{data:{token}}}; split JWT, base64.RawURLEncoding.DecodeString(payload), json.Unmarshal to get exp. Return generic errors mapped from resources/lang/ru/auth.php (100-104).
+- Async (goroutine) POST AUTHHISTORY_BACKEND/auth-history {email, action_type:login} — log only, never fail login.
+- http.SetCookie(w, {Name:census, Value:token, Expires: time.Unix(exp), HttpOnly:true, Path:/, Secure:config}) + 302 to next/home.
+3. GET /login + AuthMiddleware + GuestMiddleware: port of UserAuthCheck/RedirectAuthRequests — read census cookie, GET API_BACKEND/user/ping with both headers, on 200 populate User{ID,Email,Roles,Permissions} in request.Context; guest redirects logged-in → /customer/list, auth redirects anonymous → /login.
+4. PUT /reset-password + GET /logout: direct ports of resetPassword and HomeController@logout.
+5. Deps: stdlib only (net/http + encoding/base64/json) or chi + go-playground/validator if you prefer; html/template if you need the Blade page, else JSON API.
+
+
+
+
+
+Plan: Go net/http JSON-only login with user/ping ACL
+Stack confirmed: stdlib net/http only, JSON API, full user/ping hydration. No framework, no HTML.
+1. What PHP does (verified)
+- POST user/login {email,password,iin,remember:false} @ API_BACKEND, headers X-Application-Token: Bearer APP_TOKEN, Accept-Language: ru-RU → result.data.token (JWT) — LoginController.php:69-78.
+- JWT payload exp decoded via explode('.',token)[1] + base64_decode → cookie census=<token>, lifetime (exp-now)/60 min — :85-100.
+- POST auth-history {email, action_type:login} @ AUTHHISTORY_BACKEND, best-effort — :116-140.
+- GET user/ping with X-Application-Token + X-User-Token: Bearer <jwt> → result.acl.user {id,email,roles[{role_key,permissions[{permission_key}]}],institutions[],cardTypes[]} → App\User::fill() builds lowercase roles/permissions sets — UserAuthCheck.php:51-88, User.php:53-97.
+- Validation: email required|email, password required, iin required|iin (12-digit MOD-11, weights 1..11 then 3,4,5,6,7,8,9,10,11,1,2) — LoginRequest.php:24-31, AppServiceProvider.php:47-87.
+2. Go service layout (new module, e.g. loginapi/)
+cmd/server/main.go              — env load, mux, ListenAndServe
+internal/config/config.go       — API_BACKEND, AUTHHISTORY_BACKEND, APP_TOKEN, PORT, timeouts
+internal/validator/validator.go — ValidateLogin(email,password,iin) + IsValidIIN() port
+internal/backend/client.go      — Login(), Ping(), LogAuthHistory(), ResetPassword() via net/http
+internal/auth/jwt.go            — ParseExp(token) (split, RawURLEncoding, exp field)
+internal/auth/user.go           — User struct {ID,Email,Roles,Permissions,Institutions,CardTypes}, HasRole(), Can()
+internal/handler/login.go       — POST /api/login
+internal/handler/session.go     — GET /api/me, DELETE /api/logout, PUT /api/password/reset
+internal/middleware/auth.go     — RequireAuth (user/ping → context), RequireGuest
+No external deps. go.mod stdlib only.
+3. API contract
+- POST /api/login ← {email,password,iin} → 200 {token, expires_at, user} + Set-Cookie: census=<jwt>; HttpOnly; Path=/; SameSite=Lax (add Secure in prod). Errors JSON {error: "message (100..104)"} matching lang/ru/auth.php.
+- GET /api/me (RequireAuth) → 200 {user} from context (proves ping+ACL works).
+- DELETE /api/logout (RequireAuth) → log auth-history/logout + backend logout, clear census cookie (MaxAge:-1), 200 {message}.
+- PUT /api/password/reset ← {email, callback_url?} → proxy to backend, 200/400.
+4. Key logic
+- Client: single http.Client{Timeout:5s}; helper doJSON(method, base, path, headers, body); never leak backend body to client — map to generic 104 error, log detail server-side.
+- JWT: parts=strings.Split(token,"."), base64.RawURLEncoding.DecodeString(parts[1]), json.Unmarshal->{exp int64}; reject missing/expired.
+- IIN: regexp ^\d{12}$ + exact PHP MOD-11 port (control sum%11, 10→second weights, compare 12th digit).
+- Ping middleware: read census cookie (or Authorization: Bearer fallback for JSON clients) → GET user/ping (4s timeout) → unmarshal result.acl.user → build lowercase role/permission sets → context.WithValue(r, userKey, user) → next. Fail → 401 {error: login_required} (JSON equivalent of redirect).
+- AuthHistory: go func(){ client.LogAuthHistory(...) }() fire-and-forget with own timeout; log only.
+5. Build steps (for build mode)
+1. go mod init, config, validator (+ table tests for valid/invalid IIN, email).
+2. backend/client.go (Login/Ping/History/Reset) + auth/jwt.go, auth/user.go.
+3. Handlers + middlewares + main.go wiring mux.HandleFunc.
+4. Verify: go vet, go test ./..., manual curl POST /api/login → GET /api/me (cookie) → DELETE /api/logout.
+Out of scope (keep simple): session store, refresh tokens, CSRF (no cookies cross-site for JSON — use Authorization header acceptable), rate-limit throttle.
+
+
+
+
+
+Done. Simple JSON login API in Go (stdlib net/http only) at loginapi/:
+Structure
+- cmd/server/main.go — mux + ListenAndServe; routes: POST /api/login (guest-only), GET /api/me, DELETE|POST /api/logout (auth), PUT|POST /api/password/reset, /healthz.
+- internal/backend/client.go — Login (POST user/login), Ping (GET user/ping → hydrated auth.User), LogAuthHistory (best-effort goroutine), ResetPassword (PUT user/password/reset). Same headers as PHP: X-Application-Token: Bearer APP_TOKEN, Accept-Language: ru-RU, plus X-User-Token on ping.
+- internal/validator/ — email|password|iin rules + exact MOD-11 IIN port from AppServiceProvider.
+- internal/auth/jwt.go — JWT payload exp decode (PHP explode/base64_decode equivalent); cookie census lifetime = exp-now.
+- internal/auth/user.go — FromRaw builds lowercase role/permission sets from result.acl.user, with HasRole/Can.
+- internal/middleware/auth.go — RequireAuth (401 JSON on missing/invalid token) and RequireGuest (409 if already logged in). Reads census cookie, falls back to Authorization: Bearer for JSON clients.
+- internal/handler/login.go — Login/Me/Logout/ResetPassword with generic error messages matching PHP's auth.* (100-104) behavior.
+Verified
+- gofmt clean, go vet ./... clean, go test ./... — all pass, including new TestLoginFlow (stub backends: login → cookie + hydrated user; bad IIN → 422 without backend call).
+- Live boot: /healthz → {"status":"ok"}; invalid login → {"error":"invalid email format"}.
+Config via env: API_BACKEND, AUTHHISTORY_BACKEND, APP_TOKEN, PORT (default 8082), COOKIE_SECURE, timeouts. Run: go run ./cmd/server from loginapi/.
+
+
+
+
+
+2. Boot the server
+cp .env.example .env   # then set APP_TOKEN, backends
+go run ./cmd/server
+# or: go build -o /tmp/loginapi-server ./cmd/server && /tmp/loginapi-server
+curl localhost:8082/healthz   # -> {"status":"ok"}
+The server auto-loads .env from its working directory (missing file = fine, real env wins). Override per-run with PORT=18082 go run ./cmd/server.
+3. Validation-only check (no backend needed)
+curl -X POST localhost:8082/api/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"bad","password":"x","iin":"123"}'
+# -> 422 {"error":"invalid email format"} (never touches the backend)
+A valid-shape request needs a checksum-valid IIN, e.g. 920101350126.
+4. Full login flow (needs backends)
+Against the real backends, just point env at them:
+API_BACKEND=<real> AUTHHISTORY_BACKEND=<real> APP_TOKEN=<real> go run ./cmd/server
+curl -i -X POST localhost:8082/api/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"k.baizhigit@tha.kz","password":"12345Aa","iin":"920210351503"}'
+
+# -> 200 {"token":..., "expires_at":..., "user":{...}} + Set-Cookie: census=...
+No real backend handy? Spin up two tiny stubs — the server only needs:
+- POST {API}/user/login → {"result":{"data":{"token":"<header>.<base64url({"exp":...})>.sig"}}} (signature is not verified, only exp is decoded)
+- GET {API}/user/ping (check X-User-Token: Bearer ...) → {"result":{"acl":{"user":{"id":7,"email":"...","roles":[{"role_key":"operator","permissions":[{"permission_key":"can_view_stats"}]}]}}}}
+- POST {HISTORY}/auth-history → anything 200
+Then:
+# terminal 1: stubs on :8080/:8081 (python -m http.server won't do — needs the two routes above)
+# terminal 2:
+API_BACKEND=http://127.0.0.1:8080 AUTHHISTORY_BACKEND=http://127.0.0.1:8081 \
+APP_TOKEN=test go run ./cmd/server
+# terminal 3:
+curl -c jar -X POST localhost:8082/api/login -H 'Content-Type: application/json' \
+  -d '{"email":"u@example.com","password":"secret","iin":"920101350126"}'
+curl -b jar localhost:8082/api/me            # -> hydrated user (proves user/ping ACL)
+curl -b jar -X DELETE localhost:8082/api/logout  # -> clears census cookie
+Other endpoints: PUT /api/password/reset with {"email":...,"callback_url":...}.
+Want me to add a ready-made stub server (e.g. cmd/stub/main.go) plus a test-e2e.sh script so step 4 is one command?
+
+
+
+
+now look at this db /projects/local_db_census/, for example cities table, how to make this goca feature compatible with that table
+
+
+
+
+
+
+
+

@@ -1,0 +1,453 @@
+
+concessions
+id      name                                                                    groupId
+171     Дети из малообеспеченных семей с 9 по 11 классы                         71
+188     [ПЕРЕВЫПУСК] Дети из малообеспеченных семей с 9 по 11 классы (2000)     71
+172     Дети-сироты с 9 по 11 классы                                            72
+189     [ПЕРЕВЫПУСК] Дети-сироты с 9 по 11 классы (2000)                        72
+173     Дети, оставшиеся без попечения родителей с 9 по 11 классы               73
+190     [ПЕРЕВЫПУСК] Дети, оставшиеся без попечения родителей с 9 по 11 классы (2000)   73
+174     Учащиеся с 5 по 11 классы, колледжей очной формы обучения               74
+191     [ПЕРЕВЫПУСК] Учащиеся с 5 по 11 классы, колледжей очной формы обучения (2000)   74
+175     Дети с 1 по 4 класс                                                     75
+193     [ПЕРЕВЫПУСК] Дети с 1 по 4 класс (2000)                                 75
+176     Дети из малообеспеченных семей с 1 по 8 классы                          76
+194     [ПЕРЕВЫПУСК] Дети из малообеспеченных семей с 1 по 8 классы (2000)      76
+177     Дети-сироты с 1 по 8 классы                                             77
+195     [ПЕРЕВЫПУСК] Дети-сироты с 1 по 8 классы (2000)                         77
+178     Дети, оставшиеся без попечения родителей с 1 по 8 классы                78
+196     [ПЕРЕВЫПУСК] Дети, оставшиеся без попечения родителей с 1 по 8 классы (2000)    78
+
+ss -tulpn | grep :11330
+
+http://api.kb.api.new.tha.kz:11133
+http://api.kb.api.new.tha.kz:11233
+NGINX_PORT=11130
+SSL_PORT=11230
+PHP_PORT=11330
+BACKEND=kb.api.
+
+
+APP_URL=http://CEN-1444.frontend.new.tha.kz/
+
+BASE_API_DOMAIN=cen-1444.api.new.tha.kz
+
+API_BACKEND=http://api.cen-1444.api.new.tha.kz/
+
+FRAUD_BACKEND=http://fraud.cen-1444.api.new.tha.kz/
+
+COMPOSE_PROJECT_NAME=CEN-1444
+
+
+
+APP_URL=http://CEN-1279.frontend.new.tha.kz/
+
+BASE_API_DOMAIN=cen-1279.api.new.tha.kz
+
+API_BACKEND=http://api.cen-1279.api.new.tha.kz/
+
+FRAUD_BACKEND=http://fraud.cen-1279.api.new.tha.kz/
+
+COMPOSE_PROJECT_NAME=CEN-1279
+
+
+APP_URL=http://CEN-1467.frontend.new.tha.kz/
+
+BASE_API_DOMAIN=CEN-1467.api.new.tha.kz
+
+API_BACKEND=http://api.CEN-1467.api.new.tha.kz/
+
+FRAUD_BACKEND=http://fraud.CEN-1467.api.new.tha.kz/
+
+COMPOSE_PROJECT_NAME=CEN-1467
+
+
+
+
+
+APP_URL=http://MAPI-1394.frontend.new.tha.kz/
+
+BASE_API_DOMAIN=mapi-1394.api.new.tha.kz
+
+API_BACKEND=http://api.mapi-1394.api.new.tha.kz/
+
+FRAUD_BACKEND=http://fraud.mapi-1394.api.new.tha.kz/
+
+COMPOSE_PROJECT_NAME=MAPI-1394
+
+
+
+NGINX_PORT=11141
+
+SSL_PORT=11241
+
+PHP_PORT=11341
+
+
+1467
+COMPOSE_PROJECT_NAME=CEN-1467
+
+NGINX_PORT=11116
+
+PHP_PORT=11316
+
+11146 -> 11123
+
+
+
+var_dump($allowedIdentifiers);die;
+
+Root cause of the 403 (definitive, backend-side)
+PUT /customer/transfer → Transfers/Handlers/One.php:update() (line 59-320):
+$allowedIdentifiers = (new Filter\Institution())->getIdentifiers();
+if (null === $allowedIdentifiers || (is_array($allowedIdentifiers) && 0 === count($allowedIdentifiers))) {
+    return ...->message($this->_('error.messages.customer.transfer.insufficientRights'))
+               ->http(403)->error();
+}
+...
+$institutionIdTo = $allowedIdentifiers[0];   // target = user's FIRST allowed institution
+Filter\Institution::getIdentifiers() calls the JWT auth service (institutionShow) with the route PUT /customer/transfer; if it doesn't return code 9999 with institutions, it returns null/empty → 403.
+This is a backend authorization config issue — your user's JWT has no allowed institutions for the transfer route. It cannot be fixed from the frontend.
+Important correction: targetInstitutionID is NOT used by the backend
+- The PUT body is only { "customerId": int } (see SWG CustomerTransferRequest at TransfersController.php:14).
+- The target institution is hardcoded to $allowedIdentifiers[0] — the user cannot choose a destination. The frontend's #userTransferTo dropdown (transfer.js) is cosmetic and ignored.
+So "wire targetInstitutionID through" would do nothing — the backend would ignore it. (This also explains the old ConfirmCustomerTransfer docblock: "transfer to the current user's institution".)
+The actual backend contract (for the migration)
+Endpoint	Method	Real input
+/customer/transfer	GET	?iin=... (only; institutionId in SWG is unused in code)
+/customer/transfer	PUT	{customerId}
+/customer/transfer	OPTIONS	—
+Note: search (One::read) only reads iin; customerTransferSearch already sends only what you pass, so ['iin' => $iin] matches.
+Revised migration plan (only if you still want the frontend cleanup)
+1. searchForTransfer → $this->initApi->customerTransferSearch(['iin' => $iin]); read ->result->data[0] (fields customerIdentifier, iin, firstName, photos).
+2. confirmXfer → $this->initApi->customerTransferConfirm(['customerId' => $customer->customerIdentifier]) (drop targetInstitutionID); check ->success / ->message.
+3. Institutions → $this->initApi->getInstitutions() (keeps {id,name} shape) — the OPTIONS endpoint returns form fields, not a usable list.
+This migration gives you the real backend error message (insufficientRights) instead of "Client error: … 403", but it will not make the transfer succeed — that requires granting your account allowed institutions on the auth service.
+How would you like to proceed?
+
+
+
+I have everything I need. Here's the final, concrete plan.
+Final Plan: Migrate CustomerTransferController to $this->initApi
+Single file: app/Http/Controllers/CustomerTransferController.php.
+Change 1 — searchForTransfer()
+Signature searchForTransfer(Request $request, API $api) → searchForTransfer(Request $request).
+Old (old App\API)	New ($this->initApi)
+$customerSearch = $api->SearchForStudentTransfer($iin)	$customerSearch = $this->initApi->customerTransferSearch(['iin' => $iin])
+if (!$customerSearch->Success())	if (!$customerSearch->success || empty($customerSearch->result->data))
+$customer = $customerSearch->GetPayload()	$customer = $customerSearch->result->data[0]
+$availableInstitutions = $api->GetAllInstitutions()	$availableInstitutions = $this->initApi->getInstitutions()
+if (!$availableInstitutions->Success())	if (!$availableInstitutions->success)
+$availableInstitutions->getPayload()[0]->name	collect($availableInstitutions->result->data)->sortBy('name')->values()[0]->name
+The photo-hash block ($this->initApi->getHashesForIds(...)) is already migrated and stays unchanged. The cache logic and JSON response shape stay unchanged.
+Change 2 — confirmXfer()
+// remove:  $api = resolveAPI();
+$transferResult = $this->initApi->customerTransferConfirm([
+    'customerId' => $customer->customerIdentifier,
+]);
+
+if (!$transferResult || !$transferResult->success) {
+    return jsonResponse([], $transferResult->message ?? \Lang::get('transfer.fail'), 400);
+}
+
+return jsonResponse(['data' => $transferResult->result->data], 'OK', 200);
+- Drops targetInstitutionID (backend ignores it).
+- !$transferResult guards the getDecodedResponse() → null case on an empty error body.
+Change 3 — imports
+Remove use App\API; (no longer referenced once $api param and resolveAPI() are gone). Keep use Illuminate\Http\Request;.
+Not changing
+- transfer.js / view / routes (already send customerId-compatible targetID; targetInstitutionID is simply unused).
+- Old App\API methods (SearchForStudentTransfer, ConfirmCustomerTransfer, GetAllInstitutions) — left in place, now unused by this controller.
+Note on behavior
+After migration the confirm failure returns the backend's real message (e.g. insufficientRights) instead of "Client error: … 403". The 403 itself is still a backend permission issue — this change only surfaces it correctly and finishes the migration the photo-hash call already started.
+Ready to implement when you approve.
+
+
+Migration complete. Verified: PHP syntax clean (via docker exec dev_frontend_laravel php -l), no leftover old-client references.
+Changes to app/Http/Controllers/CustomerTransferController.php
+- Removed use App\API; and the API $api parameter.
+- searchForTransfer() now uses:
+- $this->initApi->customerTransferSearch(['iin' => $iin]) → reads ->success / ->result->data[0]
+- $this->initApi->getInstitutions() → reads ->success / ->result->data, sorted by name
+- confirmXfer() now uses $this->initApi->customerTransferConfirm(['customerId' => $customer->customerIdentifier]), drops resolveAPI(), and returns the backend's real ->message on failure (fallback errors.generic_error_try_again).
+The photo-hash call was already on the new client and is unchanged. Old App\API methods remain but are no longer referenced by this controller.
+Two things worth flagging (not changed, since they're outside this migration):
+1. The 403 itself is still backend permission config (getAllowedInstitutionIdentifiers returns empty → insufficientRights).
+2. BASE_API_DOMAIN in your .env is api.new.tha.kz; the new client builds http://api.{BASE_API_DOMAIN}/ = http://api.api.new.tha.kz/. Per .gitlab-ci.yml, it should be just new.tha.kz (no api. prefix). This may affect whether the new client reaches the intended backend.
+
+
+What you need to be granted (in the auth service / role admin)
+1. The can_transfer_cust permission attached to your role.
+2. At least one allowed institution for the PUT /customer/transfer route — i.e. an institutions-type role with a single institution bound to your account (note InfoController.php:670 gates the transfer flow on hasRole('institutions', true)).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+src/App/Model/Service/Customer/Transfers/Handlers/One.php
+
+Update()
+1. проверка заведения у ответственных лиц       error.messages.customer.transfer.insufficientRights
+2. проверка пользователя                        error.messages.customer.transfer.notFound
+ - транзакция:
+3. проверка текущего и нового заведений         error.messages.customer.transfer.institutionNotFound
+4. проверка на их неравенство                   error.messages.customer.transfer.theSameInstitution
+5. вычисляет стоимость перевода клиента между учреждениями:
+    1. если льгота клиента совпадает с льготой целевого учреждения, стоимость 0 — перевод бесплатный.
+    2. определение: выдача или перевыпуск: перевыпуск (возможно, дешевле) применяется, если клиент ранее уже имел эту льготу, но она не активна. Иначе — полная стоимость выдачи.
+
+
+
+
+
+1. Проверка заведений у ответственных лиц (строки 75-84):
+Проверяется $allowedIdentifiers — список идентификаторов учреждений, доступных текущему пользователю. Если пустой → ошибка 403 с сообщением error.messages.customer.transfer.insufficientRights.
+2. Проверка пользователя (строки 89-95):
+Ищется $customerEntity по $requestData->customerId. Если не найден → ошибка 404 с сообщением error.messages.customer.transfer.notFound.
+Транзакция (строка 103):
+Далее идёт createEntry(function (Transaction $transaction) ...) — все операции внутри выполняются как одна транзакция.
+3. Проверка текущего и нового заведений (строки 151-157):
+Проверяются $institutionFromEntity и $institutionToEntity. Если хотя бы одно не найдено → ошибка 200 с сообщением error.messages.customer.transfer.institutionNotFound.
+4. Проверка на их неравенство (строки 159-165):
+Если institutionToEntity->getId() === institutionFromEntity->getId() → ошибка 200 с сообщением error.messages.customer.transfer.theSameInstitution.
+5. Вычисление стоимости (строки 176-190):
+Вызывается getCost(), которая возвращает null → ошибка 200 с сообщением error.messages.customer.transfer.cannotCalculateCost.
+Описание логики getCost верно:
+- Если льгота совпадает с льготой целевого учреждения → стоимость 0 (бесплатно).
+- Иначе проверяется, был ли ранее такой тип льготы у клиента в неактивном состоянии → если да, это перевыпуск (может быть дешевле), иначе — выдача.
+Дополнение: После вычисления стоимости в транзакции:
+- Создание записи перевода (customerTransferRepository->createOne).
+- Удаление дополнительных полей учреждения (additionalFieldValues).
+- Обновление $customerEntity->setInstitutionId и сохранение.
+- Логирование и обработка льгот (блокировка, истечение срока).
+- Формирование ответа с сообщением о успехе.
+
+
+
+
+Текущая реализация предоставляет возможность перевода клиента между учреждениями. Нет валидации нахождения учреждений в одном городе. Клиент может быть переведён в учреждение в другом городе. Ответственное лицо может перевести клиента только в учреждения, к которым у него есть доступ, также нужна роль 'can_transfer_cust' для отображения вкладки 'Перевод' в меню.
+
+1. Проверка заведений у ответственных лиц:
+Проверяется список учреждений, доступных текущему пользователю. Если пустой → ошибка 403 с сообщением "Недостаточно прав".
+2. Проверка пользователя:
+Ищется пользователь на перевод. Если не найден → ошибка 404 с сообщением "Клиент не найден".
+3. Проверка текущего и нового заведений: Если хотя бы одно не найдено → ошибка 200 с сообщением "Не могу найти исходный и/или институт назначения".
+4. Проверка на их неравенство:
+Если равно → ошибка 200 с сообщением "Вы не можете инициировать трансферт клиента в тоже самое заведение".
+5. Вычисление стоимости:
+- Если льгота совпадает с льготой целевого учреждения → стоимость 0 (бесплатно).
+- Иначе проверяется, был ли ранее такой тип льготы у клиента в неактивном состоянии → если да, это перевыпуск (может быть дешевле), иначе — выдача.
+Если вдруг возвращает null → ошибка 200 с сообщением "Не могу просчитать стоимость выпуска/перевыпуска".
+6. Формирование ответа с сообщением о успехе.
+
+
+
+
+
+
+
+
+
+All changes are in place. Let me provide a summary.
+Готово — учёт города убран
+Backend (~/projects/cen-1467)
+- Customer.php — statisticsRegisteredProfiles(): удалены чтение $cityId и блок фильтра cityId. Агрегация теперь идёт по всем регионам.
+Frontend (~/projects/frontend-master)
+- routes/web.php: маршрут get.reports.registeredProfiles вынесен из группы с middleware => 'city' — больше не требует параметр city (иначе был бы 404). URL и name сохранены. Auth по-прежнему применяется глобально (web, auth).
+- ReportController.php — getRegisteredProfiles(): убрано get_city_id(), getInstitutions() и getConcessions() вызываются без cityId (все регионы), cityId не передаётся в API и в view.
+- registered.blade.php: убраны @include('common.menus.cities') и скрытое поле city. Фильтры (группа/заведения/льготы/даты), таблица с колонками по дням и экспорт сохранены.
+- components/report/menu.blade.php и dropMenu.blade.php: отчёт — одиночный пункт меню (без подменю по городам), ссылка без city.
+Теперь отчёт выгружает данные по зарегистрированным анкетам (группа заведений → заведение → льгота, по дням/периоду) по всем регионам сразу, без учёта города.
+
+
+
+добавить новый отчет по зарегистрированным анкетам, создать возможность выгрузки данных по количеству зарегистрированных в группе заведений, в заведении, по льготе, за определенный день или период во всех имеющихся регионах.
+
+now review changes made on the same task on frontend project in /home/devpc039/projects/frontend-master
+
+
+
+review again on consistency of backend and frontend
+
+
+current es search always returns empty
+
+
+
+
+
+Decisions (recommended)
+1. Concession = active only (isActive AND concessionId NOT IN (0,90), one per customer via LATERAL).
+2. Orphan institutions (no group) = dropped.
+3. Dates = required (startDate/endDate); return 400 if missing/invalid.
+4. Repo wiring = change Statistics\Customers::$repositoryClass to App\Model\Repository\Customers.
+5. concessions filter/group key = concessions.name (string).
+Changes
+1. src/App/Model/Repository/Customers.php — add method:
+public function getRegisteredProfilesStats(Carbon $start, Carbon $end, ?int $groupId,
+                                           array $institutionIds, array $concessions): array
+Raw SQL (read connection, quoted camelCase columns), returns rows {institutionGroupId, institutionId, concession, day, cnt}:
+SELECT g."institutionGroupId", c."institutionId",
+       COALESCE(con."name", '') AS concession,
+       DATE(c."createdAt") AS day, COUNT(*) AS cnt
+FROM customers c
+JOIN institution_institution_group g ON g."institutionId" = c."institutionId"
+LEFT JOIN LATERAL (
+    SELECT cc."concessionId" FROM customer_concessions cc
+    WHERE cc."customerId" = c."id" AND cc."isActive" = true AND cc."concessionId" NOT IN (0,90)
+    ORDER BY cc."id" DESC LIMIT 1
+) acc ON true
+LEFT JOIN concessions con ON con."id" = acc."concessionId"
+WHERE c."isDeleted" = false
+  AND c."createdAt" >= :start AND c."createdAt" <= :end
+  AND (:groupId IS NULL OR g."institutionGroupId" = :groupId)
+  AND (:instIds = '{}'::int[]  OR c."institutionId" = ANY(:instIds))
+  AND (:concessions = '{}'::text[] OR con."name" = ANY(:concessions))
+GROUP BY 1,2,3,4 ORDER BY 1,2,3,4;
+2. src/App/Model/Service/Report/Statistics/Customers/Handlers/RegisteredProfiles.php — replace ES path:
+- Require+parse startDate/endDate (Carbon::parse, swap if start>end, cap 365 days; 400 on failure).
+- Parse institutionId[] (strip -1/''/null, intval), institutionGroupId (-1→null; allow 0), concessions[] names.
+- Call repo, map flat rows → nested institutionGroups → institutions → concessions[].{name, concession, count, byDay:{Y-m-d:cnt}}.
+- Keep try/catch → logger->error → 400 fallback.
+3. src/App/Model/Service/Report/Statistics/Customers.php:18 — $repositoryClass = \App\Model\Repository\Customers::class.
+Verify
+- Unit (mock repo rows → assert nested JSON) + integration (seed census_dev → GET /stat/customers/registered-profiles?startDate=...&endDate=...).
+- EXPLAIN ANALYZE for 365-day range; add idx_customers_createdat_institution if needed.
+Approve and switch to Build mode, and I'll implement these three files.
+
+
+Done. Implemented Plan C (SQL-backed) as recommended.
+Changes:
+1. src/App/Model/Repository/Customers.php — added getRegisteredProfilesStats() running a Postgres aggregation (group → institution → concession → day) with LATERAL for the single active concession per customer, optional filters (groupId, institutionIds, concessions names), and isDeleted = false + createdAt range.
+2. src/App/Model/Service/Report/Statistics/Customers/Handlers/RegisteredProfiles.php — replaced the ES path: requires startDate/endDate (400 if missing/invalid), normalizes dates (swap, 365-day cap), parses filters (-1/''/null stripped, '0' group allowed), and maps flat rows to the existing nested response shape.
+3. src/App/Model/Service/Report/Statistics/Customers.php — $repositoryClass now App\Model\Repository\Customers so the handler's $this->repository has the new method.
+All three files pass php -l (via the docker.tha.kz/census/phalcon:latest image). No tests referenced this endpoint. statisticsRegisteredProfiles() in Search/Customer.php is now unused but left intact.
+Note: I could not run a live DB query (no running containers/DB), so the SQL is verified for syntax only — worth running EXPLAIN ANALYZE against a real DB and checking the LATERAL join works on your Postgres version before shipping.
+
+
+
+form has reset button, make it reset all form inputs as like in other reports
+
+how works import to excel format? how to change cell appearance: center, make bold and etc
+
+
+
+
+
+Таблицы для добавления города:
+
+1. cities
+2. institution_types
+3. institutions
+4. institutions_printing
+5. city_institution_types
+6. city_by_institutions
+7. institution_owners (не всегда)
+8. institution_groups (не всегда)
+9. concession_categories
+10. concession_subcategories
+11. concession_groups
+12. concessions
+13. concession_rules
+14. concession_validations
+15. card_types
+16. card_type_concessions
+17. concession_costs
+18. institution_type_concessions
+19. ct_card_titles
+20. ct_card_colors
+21. ct_card_tariffs
+
+
+SELECT id,
+       "institutionTypeId",
+       "concessionId"
+FROM public.institution_type_concessions
+LIMIT 1000;
+
+
+
+
+условия хранятся в таблице concession_rules, где связаны со льготой по полю concessionGroupId (айди на concession_groups), получается одно условие на одну группу льгот.
+
+а в тз прописаны разные условия для льгот в одной группе, что не особо сходится с текущей схемой, нужно новые группы создавать и тд
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+APP_URL=http://MAPI-1255.frontend.new.tha.kz/
+
+BASE_API_DOMAIN=new.tha.kz
+
+API_BACKEND=http://api.new.tha.kz/
+
+FRAUD_BACKEND=http://fraud.new.tha.kz/
+
+COMPOSE_PROJECT_NAME=MAPI-1255
+
+NGINX_PORT=12521
+
+SSL_PORT=12522
+
+PHP_PORT=12523
+
+
+
+server {
+    listen 80;
+    server_name MAPI-1255.frontend.new.tha.kz;
+
+    location / {
+        proxy_pass       http://MAPI-1255.frontend.new.tha.kz:12521;
+        proxy_redirect   off;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host $server_name;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+

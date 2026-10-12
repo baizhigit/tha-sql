@@ -1,0 +1,64 @@
+docker exec -it CEN-1967_api_phalcon bash
+docker exec -it MAPI-1394_api_phalcon bash
+docker exec -it kb_api_phalcon bash
+root@CEN-1467-phalcon:/var/log/api#
+
+var_dump($var); exit;
+
+\Phalcon\Di::getDefault()->get('logger')->withName('SQL')->info($sql, $params);
+
+$eds = $this
+        ->getDi()
+        ->get('config')
+        ->hardcoded
+        ->educationInstitutions;
+\Phalcon\Di::getDefault()->get('logger')->withName('educationInstitutions:')->debug('allowedIdentifiers: ' . json_encode($eds, JSON_UNESCAPED_UNICODE));
+
+
+$logger = $this->getDI()->get('logger')->withName('TRANSFER_CUSTOMER');
+$logger->debug('allowedIdentifiers: ' . json_encode($allowedIdentifiers, JSON_UNESCAPED_UNICODE));
+
+grep "TRANSFER_CUSTOMER" Api-Development.log
+grep "TRANSFER_CUSTOMER" Api-Development.log | grep "allowedIdentifiers"
+
+grep "KB_INSTITUTIONS" Api-Development.log
+grep "GET_INSTITUTIONS_IDENTIFIERS" Api-Development.log
+
+------------------------------
+in laravel
+use Illuminate\Support\Facades\Log;
+Log::info('log test');
+
+tail -f storage/logs/laravel.log
+
+
+sudo chown -R :kbaizhigit ./MAPI-1394/
+sudo chmod -R g+rwx ./MAPI-1394/
+
+sudo service nginx reload
+
+
+applicationToken: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpYXQiOjE0ODk3NDQyMDksImp0aSI6InQ4MGRVSWRhN3hmbkpNWWNvaDR4U29zOWZBRjNSVWV5IiwiaXNzIjoiQ2Vuc3VzIEFQSSBhdXRob3JpemF0aW9uIHNlcnZpY2UiLCJhdWQiOiJGcm9udGVuZCIsIm5iZiI6MTQ4OTc0NDIzOSwiZXhwIjoxODA1MTA0MjA5LCJkYXRhIjp7InJvdXRlcyI6eyIvY3VzdG9tZXIvKiI6WyIqIl0sIi9jdXN0b21lcnMvKiI6WyIqIl0sIi92YWxpZGF0aW9uLyoiOlsiKiJdLCIvaW5zdGl0dXRpb24vKiI6WyIqIl0sIi9pbnN0aXR1dGlvbnMvKiI6WyIqIl0sIi91cGxvYWQvZmlsZSI6WyJwb3N0Il19LCJob3N0cyI6WyJhcGkuZGV2LnRoYS5reiIsImFwaS5uZXcudGhhLmt6IiwiYXBpLmRuLm5ldy50aGEua3oiLCJhcGkuaWoubmV3LnRoYS5reiIsImJpbGxpbmcuZGV2LnRoYS5reiIsImJpbGxpbmcubmV3LnRoYS5reiIsImJpbGxpbmcuZG4ubmV3LnRoYS5reiIsImJpbGxpbmcuaWoubmV3LnRoYS5reiIsImNkbi5kZXYudGhhLmt6IiwiY2RuLm5ldy50aGEua3oiLCJjZG4uZG4ubmV3LnRoYS5reiIsImNkbi5pai5uZXcudGhhLmt6IiwiZnJhdWQuZGV2LnRoYS5reiIsImZyYXVkLm5ldy50aGEua3oiLCJmcmF1ZC5kbi5uZXcudGhhLmt6IiwiZnJhdWQuaWoubmV3LnRoYS5reiIsInB1Yi5kZXYudGhhLmt6IiwicHViLm5ldy50aGEua3oiLCJwdWIuZG4ubmV3LnRoYS5reiIsInB1Yi5pai5uZXcudGhhLmt6Il19fQ.sqEwQb7GW1xt_sNNBKlwgwoR5-FKKeiEhVTgyEyn1R4
+
+userToken: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpYXQiOjE3ODY5NTc2OTgsImp0aSI6IjZ5MUVBVFJHOVB4TXBqaTg0d1JZUUVSYkpkTktHNGpGIiwiaXNzIjoiQ2Vuc3VzIEFQSSBhdXRob3JpemF0aW9uIHNlcnZpY2UiLCJhdWQiOiJrLmJhaXpoaWdpdEB0aGEua3oiLCJuYmYiOjE3ODY5NTc2OTgsImV4cCI6MTgxODQ5MzY5OCwiZGF0YSI6IiJ9.xEewRQnIOuKg7IaIKMQeJYVupvGWCLY5pUZrKWsb1K4
+
+[2026-08-17 14:09:14] TRANSFER_CUSTOMER.DEBUG: allowedIdentifiers empty {"extra":{"ip":"10.213.108.6","route":"PUT /customer/transfer","userId":1231,"requestId":"request_6a82cfba2ee30"}} []
+
+
+
+
+    <!-- @if($user->can('view_registered_profiles_report')) -->
+        <a class="item @if(Route::current()->getName() == 'get.reports.registeredProfiles') active @endif"
+        href="{{route('get.reports.registeredProfiles')}}">
+            {{Lang::get('nav.registered_profiles_report')}}
+        </a>
+    <!-- @endif -->
+
+1d125fcae756   nginx:latest                                                                            "/docker-entrypoint.…"   46 hours ago    Up 46 hours                   0.0.0.0:11130->80/tcp, 0.0.0.0:11230->443/tcp                                                kb_frontend_nginx
+4808de042681   docker.tha.kz/census/laravel:1.9                                                        "docker-php-entrypoi…"   46 hours ago    Up 46 hours                   0.0.0.0:11330->9000/tcp                                                                      kb_frontend_laravel
+81f3687fd27f   nginx:latest                                                                            "/docker-entrypoint.…"   46 hours ago    Up 46 hours                   0.0.0.0:11133->80/tcp                                                                        kb_api_nginx
+ad4bd770a4c1   docker.tha.kz/census/phalcon:latest                                                     "docker-php-entrypoi…"   46 hours ago    Up 46 hours                   0.0.0.0:11233->9000/tcp
+
+
+5978260     890106400016
+
